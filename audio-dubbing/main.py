@@ -1,57 +1,42 @@
-from fastapi import FastAPI
+import os
+import torch
+from fastapi import FastAPI, UploadFile
+import tempfile
+from openvoice.api import ToneColorConverter, se_extractor
+import torchaudio
 
 app = FastAPI()
 
-@app.post("/transcribe")
-def transcribe(filename: str):
-    import os
-    import whisper
-    import json
-    print("whisper y os importados!")
+@app.post("/voiceclone")
+async def voice_clone(file: UploadFile):
+    # Configurar cache persistente (ejemplo)
+    CUSTOM_CACHE_DIR = "/persistent-storage/openvoice_cache/"
+    os.environ["OPENVOICE_HOME"] = CUSTOM_CACHE_DIR
 
-    # 👇 Seteamos la variable de entorno ANTES de cargar el modelo
-    CUSTOM_CACHE_DIR = "/persistent-storage/whisper_cache/"  # o cualquier path persistente que montes en tu contenedor
-    os.environ["XDG_CACHE_HOME"] = CUSTOM_CACHE_DIR
-    # Ahora cargamos el modelo
-    model = whisper.load_model("large", device="cuda")  # usa el cache overrideado
-    print("Modelo large cargado!")
+    # Guardar audio temporal
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
 
-    audio_path = os.path.join("/persistent-storage/audio-files/", filename)
-    if not os.path.exists(audio_path):
-        return {"error": "Archivo no encontrado"}
-    
-    print(f"Transcribiendo {audio_path}...")
-    result = model.transcribe(audio_path, language="es")
-    text = result["text"]
+    # 1. Cargar modelo (puedes cachearlo como Whisper)
+    ckpt_converter = "checkpoints/converter"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tone_color_converter = ToneColorConverter(ckpt_converter, device=device)
 
-    print("Transcripción completada, guardando resultado...")
-    # Guardar resultado en TXT
-    txt_filename = os.path.splitext(filename)[0] + ".txt"
-    txt_path = os.path.join("/persistent-storage/output-files/whisper/", txt_filename)
-    with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(text)
+    # 2. Extraer embedding del audio de referencia
+    src_path = tmp_path
+    src_se, audio_name = se_extractor.get_se(src_path, tone_color_converter, vad=True)
 
-    # Guardar resultado completo como JSON
-    json_filename = os.path.splitext(filename)[0] + ".json"
-    json_path = os.path.join("/persistent-storage/output-files/whisper/", json_filename)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    # 3. Generar salida (ejemplo simple, necesitas texto de entrada para TTS)
+    out_path = tmp_path.replace(".wav", "_cloned.wav")
+    tone_color_converter.convert(
+        audio_src_path=src_path,
+        src_se=src_se,
+        tgt_se=src_se,  # aquí podrías poner otro timbre
+        output_path=out_path,
+    )
 
-    print(f"Archivos guardados en {txt_path} y {json_path}")
-    file_size_txt = os.path.getsize(txt_path)
-    file_size_json = os.path.getsize(json_path)
     return {
-        "text_file": txt_path,
-        "json_file": json_path,
-        "text_file_size": file_size_txt,
-        "json_file_size": file_size_json
+        "output_audio": out_path,
+        "cache_dir": CUSTOM_CACHE_DIR
     }
-
-
-@app.get("/health")
-def health():
-    return "OK"
-
-@app.get("/ready")
-def ready():
-    return "OK"

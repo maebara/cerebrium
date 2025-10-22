@@ -43,4 +43,4 @@ def download_all_files(remote_folder="", local_folder="./downloaded_files"):
         print(f"Error: {e}")
 
 # Usar el script
-download_all_files("output-files/aws-complete", "./carpeta")
+download_all_files("output-files/scrum", "./carpeta")
